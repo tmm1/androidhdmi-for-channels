@@ -14,7 +14,26 @@ import (
 
 type reader struct {
 	io.ReadCloser
-	stop string
+	pre, start, stop string
+	channel          string
+	started          bool
+}
+
+func (r *reader) Read(p []byte) (int, error) {
+	if !r.started {
+		r.started = true
+		go func() {
+			if err := execute(r.pre); err != nil {
+				log.Printf("[ERR] Failed to run pre script: %v", err)
+				return
+			}
+			if err := execute(r.start, r.channel); err != nil {
+				log.Printf("[ERR] Failed to run start script: %v", err)
+				return
+			}
+		}()
+	}
+	return r.ReadCloser.Read(p)
 }
 
 func (r *reader) Close() error {
@@ -52,15 +71,6 @@ func tune(tuner, channel string) (io.ReadCloser, error) {
 		return nil, fmt.Errorf("invalid tuner")
 	}
 
-	if err := execute(pre); err != nil {
-		log.Printf("[ERR] Failed to run pre script: %v", err)
-		return nil, err
-	}
-	if err := execute(start, channel); err != nil {
-		log.Printf("[ERR] Failed to run start script: %v", err)
-		return nil, err
-	}
-
 	resp, err := http.Get(src)
 	if err != nil {
 		log.Printf("[ERR] Failed to fetch source: %v", err)
@@ -72,6 +82,9 @@ func tune(tuner, channel string) (io.ReadCloser, error) {
 
 	return &reader{
 		ReadCloser: resp.Body,
+		channel:    channel,
+		pre:        pre,
+		start:      start,
 		stop:       stop,
 	}, nil
 }
