@@ -24,11 +24,15 @@ func (r *reader) Close() error {
 	return r.ReadCloser.Close()
 }
 
-func main() {
-	err := run()
-	if err != nil {
-		panic(err)
-	}
+func execute(args ...string) error {
+	t0 := time.Now()
+	log.Printf("Running %v", args)
+	cmd := exec.Command(args[0], args[1:]...)
+	cmd.Stdout = os.Stdout
+	cmd.Stderr = os.Stderr
+	err := cmd.Run()
+	log.Printf("Finished running %v in %v", args[0], time.Since(t0))
+	return err
 }
 
 func tune(tuner, channel string) (io.ReadCloser, error) {
@@ -99,13 +103,9 @@ func run() error {
 	return r.Run(":7654")
 }
 
-func execute(args ...string) error {
-	t0 := time.Now()
-	log.Printf("Running %v", args)
-	cmd := exec.Command(args[0], args[1:]...)
-	cmd.Stdout = os.Stdout
-	cmd.Stderr = os.Stderr
-	err := cmd.Run()
-	log.Printf("Finished running %v in %v", args[0], time.Since(t0))
-	return err
+func main() {
+	err := run()
+	if err != nil {
+		panic(err)
+	}
 }
