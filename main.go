@@ -6,6 +6,7 @@ import (
 	"net/http"
 	"os"
 	"os/exec"
+	"time"
 
 	"github.com/gin-gonic/gin"
 )
@@ -81,9 +82,12 @@ func run() error {
 }
 
 func execute(args ...string) error {
+	t0 := time.Now()
 	log.Printf("Running %v", args)
 	cmd := exec.Command(args[0], args[1:]...)
 	cmd.Stdout = os.Stdout
 	cmd.Stderr = os.Stderr
-	return cmd.Run()
+	err := cmd.Run()
+	log.Printf("Finished running %v in %v", args[0], time.Since(t0))
+	return err
 }
