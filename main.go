@@ -1,6 +1,7 @@
 package main
 
 import (
+	"fmt"
 	"io"
 	"log"
 	"net/http"
@@ -11,11 +12,64 @@ import (
 	"github.com/gin-gonic/gin"
 )
 
+type reader struct {
+	io.ReadCloser
+	stop string
+}
+
+func (r *reader) Close() error {
+	if err := execute(r.stop); err != nil {
+		log.Printf("[ERR] Failed to run stop script: %v", err)
+	}
+	return r.ReadCloser.Close()
+}
+
 func main() {
 	err := run()
 	if err != nil {
 		panic(err)
 	}
+}
+
+func tune(tuner, channel string) (io.ReadCloser, error) {
+	var src, pre, start, stop string
+	switch tuner {
+	case "0":
+		src = "http://192.168.1.168/0.ts"
+		pre = "/opt/opendct/prebmitune.sh"
+		start = "/opt/opendct/bmitune.sh"
+		stop = "/opt/opendct/stopbmitune.sh"
+	case "1":
+		src = "http://192.168.1.169/main"
+		pre = "/opt/opendct/prebmituneb.sh"
+		start = "/opt/opendct/bmituneb.sh"
+		stop = "/opt/opendct/stopbmituneb.sh"
+	default:
+		return nil, fmt.Errorf("invalid tuner")
+	}
+
+	if err := execute(pre); err != nil {
+		log.Printf("[ERR] Failed to run pre script: %v", err)
+		return nil, err
+	}
+	if err := execute(start, channel); err != nil {
+		log.Printf("[ERR] Failed to run start script: %v", err)
+		return nil, err
+	}
+
+	resp, err := http.Get(src)
+	if err != nil {
+		log.Printf("[ERR] Failed to fetch source: %v", err)
+		return nil, err
+	} else if resp.StatusCode != 200 {
+		log.Printf("[ERR] Failed to fetch source: %v", resp.Status)
+		return nil, fmt.Errorf("invalid response: %v", resp.Status)
+	}
+
+	return &reader{
+		ReadCloser: resp.Body,
+		stop:       stop,
+	}, nil
 }
 
 func run() error {
@@ -25,42 +79,9 @@ func run() error {
 		tuner := c.Param("tuner")
 		channel := c.Param("channel")
 
-		var src, pre, start, stop string
-		switch tuner {
-		case "0":
-			src = "http://192.168.1.168/0.ts"
-			pre = "/opt/opendct/prebmitune.sh"
-			start = "/opt/opendct/bmitune.sh"
-			stop = "/opt/opendct/stopbmitune.sh"
-		case "1":
-			src = "http://192.168.1.169/main"
-			pre = "/opt/opendct/prebmituneb.sh"
-			start = "/opt/opendct/bmituneb.sh"
-			stop = "/opt/opendct/stopbmituneb.sh"
-		default:
-			c.JSON(500, gin.H{"error": "invalid tuner"})
-			return
-		}
-
-		if err := execute(pre); err != nil {
-			log.Printf("[ERR] Failed to run pre script: %v", err)
-			c.JSON(500, gin.H{"error": err.Error()})
-			return
-		}
-		if err := execute(start, channel); err != nil {
-			log.Printf("[ERR] Failed to run start script: %v", err)
-			c.JSON(500, gin.H{"error": err.Error()})
-			return
-		}
-
-		resp, err := http.Get(src)
+		reader, err := tune(tuner, channel)
 		if err != nil {
-			log.Printf("[ERR] Failed to fetch source: %v", err)
 			c.JSON(500, gin.H{"error": err.Error()})
-			return
-		} else if resp.StatusCode != 200 {
-			log.Printf("[ERR] Failed to fetch source: %v", resp.Status)
-			c.JSON(500, gin.H{"error": resp.Status})
 			return
 		}
 
@@ -70,13 +91,10 @@ func run() error {
 		c.Writer.Flush()
 
 		defer func() {
-			resp.Body.Close()
-			if err := execute(stop); err != nil {
-				log.Printf("[ERR] Failed to run stop script: %v", err)
-			}
+			reader.Close()
 		}()
 
-		io.Copy(c.Writer, resp.Body)
+		io.Copy(c.Writer, reader)
 	})
 	return r.Run(":7654")
 }
