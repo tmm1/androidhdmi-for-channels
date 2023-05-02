@@ -2,7 +2,9 @@ package main
 
 import (
 	"io"
+	"log"
 	"net/http"
+	"os"
 	"os/exec"
 
 	"github.com/gin-gonic/gin"
@@ -38,12 +40,25 @@ func run() error {
 			return
 		}
 
-		exec.Command(pre).Run()
-		exec.Command(start, channel).Run()
+		if err := execute(pre); err != nil {
+			log.Printf("[ERR] Failed to run pre script: %v", err)
+			c.JSON(500, gin.H{"error": err.Error()})
+			return
+		}
+		if err := execute(start, channel); err != nil {
+			log.Printf("[ERR] Failed to run start script: %v", err)
+			c.JSON(500, gin.H{"error": err.Error()})
+			return
+		}
 
 		resp, err := http.Get(src)
 		if err != nil {
+			log.Printf("[ERR] Failed to fetch source: %v", err)
 			c.JSON(500, gin.H{"error": err.Error()})
+			return
+		} else if resp.StatusCode != 200 {
+			log.Printf("[ERR] Failed to fetch source: %v", resp.Status)
+			c.JSON(500, gin.H{"error": resp.Status})
 			return
 		}
 
@@ -54,10 +69,20 @@ func run() error {
 
 		defer func() {
 			resp.Body.Close()
-			exec.Command(stop).Run()
+			if err := execute(stop); err != nil {
+				log.Printf("[ERR] Failed to run stop script: %v", err)
+			}
 		}()
 
 		io.Copy(c.Writer, resp.Body)
 	})
 	return r.Run(":7654")
+}
+
+func execute(args ...string) error {
+	log.Printf("Running %v", args)
+	cmd := exec.Command(args[0], args[1:]...)
+	cmd.Stdout = os.Stdout
+	cmd.Stderr = os.Stderr
+	return cmd.Run()
 }
