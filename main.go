@@ -79,16 +79,16 @@ func run() error {
 		tuner := c.Param("tuner")
 		channel := c.Param("channel")
 
+		c.Header("Transfer-Encoding", "identity")
+		c.Header("Content-Type", "video/mp2t")
+		c.Writer.WriteHeaderNow()
+		c.Writer.Flush()
+
 		reader, err := tune(tuner, channel)
 		if err != nil {
 			c.JSON(500, gin.H{"error": err.Error()})
 			return
 		}
-
-		c.Header("Transfer-Encoding", "identity")
-		c.Header("Content-Type", "video/mp2t")
-		c.Writer.WriteHeaderNow()
-		c.Writer.Flush()
 
 		defer func() {
 			reader.Close()
