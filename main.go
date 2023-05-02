@@ -19,6 +19,7 @@ func main() {
 
 func run() error {
 	r := gin.Default()
+	r.SetTrustedProxies(nil)
 	r.GET("/play/tuner:tuner/:channel", func(c *gin.Context) {
 		tuner := c.Param("tuner")
 		channel := c.Param("channel")
