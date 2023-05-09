@@ -4,30 +4,67 @@ import (
 	"fmt"
 	"io"
 	"log"
+	"net"
 	"net/http"
 	"os"
 	"os/exec"
+	"strconv"
+	"sync"
 	"time"
 
 	"github.com/gin-gonic/gin"
 )
 
+var (
+	tunerLock sync.Mutex
+
+	tuners = []tuner{
+		{
+			url:   "http://192.168.1.168/0.ts",
+			pre:   "/opt/opendct/prebmitune.sh",
+			start: "/opt/opendct/bmitune.sh",
+			stop:  "/opt/opendct/stopbmitune.sh",
+		},
+		{
+			url:   "http://192.168.1.169/main",
+			pre:   "/opt/opendct/prebmituneb.sh",
+			start: "/opt/opendct/bmituneb.sh",
+			stop:  "/opt/opendct/stopbmituneb.sh",
+		},
+	}
+)
+
+type tuner struct {
+	url              string
+	pre, start, stop string
+	active           bool
+}
+
 type reader struct {
 	io.ReadCloser
-	pre, start, stop string
-	channel          string
-	started          bool
+	t       *tuner
+	channel string
+	started bool
+}
+
+func init() {
+	transport := http.DefaultTransport.(*http.Transport).Clone()
+	transport.ResponseHeaderTimeout = 5 * time.Second
+	transport.DialContext = (&net.Dialer{
+		Timeout: 5 * time.Second,
+	}).DialContext
+	http.DefaultClient.Transport = transport
 }
 
 func (r *reader) Read(p []byte) (int, error) {
 	if !r.started {
 		r.started = true
 		go func() {
-			if err := execute(r.pre); err != nil {
+			if err := execute(r.t.pre); err != nil {
 				log.Printf("[ERR] Failed to run pre script: %v", err)
 				return
 			}
-			if err := execute(r.start, r.channel); err != nil {
+			if err := execute(r.t.start, r.channel); err != nil {
 				log.Printf("[ERR] Failed to run start script: %v", err)
 				return
 			}
@@ -37,9 +74,12 @@ func (r *reader) Read(p []byte) (int, error) {
 }
 
 func (r *reader) Close() error {
-	if err := execute(r.stop); err != nil {
+	if err := execute(r.t.stop); err != nil {
 		log.Printf("[ERR] Failed to run stop script: %v", err)
 	}
+	tunerLock.Lock()
+	r.t.active = false
+	tunerLock.Unlock()
 	return r.ReadCloser.Close()
 }
 
@@ -54,24 +94,31 @@ func execute(args ...string) error {
 	return err
 }
 
-func tune(tuner, channel string) (io.ReadCloser, error) {
-	var src, pre, start, stop string
-	switch tuner {
-	case "0":
-		src = "http://192.168.1.168/0.ts"
-		pre = "/opt/opendct/prebmitune.sh"
-		start = "/opt/opendct/bmitune.sh"
-		stop = "/opt/opendct/stopbmitune.sh"
-	case "1":
-		src = "http://192.168.1.169/main"
-		pre = "/opt/opendct/prebmituneb.sh"
-		start = "/opt/opendct/bmituneb.sh"
-		stop = "/opt/opendct/stopbmituneb.sh"
-	default:
-		return nil, fmt.Errorf("invalid tuner")
+func tune(idx, channel string) (io.ReadCloser, error) {
+	tunerLock.Lock()
+	defer tunerLock.Unlock()
+
+	var t *tuner
+	log.Printf("tune for %v %v", idx, channel)
+	if idx == "" || idx == "auto" {
+		for i, ti := range tuners {
+			if ti.active {
+				continue
+			}
+			t = &tuners[i]
+			break
+		}
+	} else {
+		i, _ := strconv.Atoi(idx)
+		if i < len(tuners) && i >= 0 {
+			t = &tuners[i]
+		}
+	}
+	if t == nil {
+		return nil, fmt.Errorf("tuner not available")
 	}
 
-	resp, err := http.Get(src)
+	resp, err := http.Get(t.url)
 	if err != nil {
 		log.Printf("[ERR] Failed to fetch source: %v", err)
 		return nil, err
@@ -80,12 +127,11 @@ func tune(tuner, channel string) (io.ReadCloser, error) {
 		return nil, fmt.Errorf("invalid response: %v", resp.Status)
 	}
 
+	t.active = true
 	return &reader{
 		ReadCloser: resp.Body,
 		channel:    channel,
-		pre:        pre,
-		start:      start,
-		stop:       stop,
+		t:          t,
 	}, nil
 }
 
